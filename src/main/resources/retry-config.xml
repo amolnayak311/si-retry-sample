@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:int="http://www.springframework.org/schema/integration"
+	xmlns:task="http://www.springframework.org/schema/task"
+	xmlns:int-stream="http://www.springframework.org/schema/integration/stream"
+	xsi:schemaLocation="http://www.springframework.org/schema/integration http://www.springframework.org/schema/integration/spring-integration-2.1.xsd
+		http://www.springframework.org/schema/integration/stream http://www.springframework.org/schema/integration/stream/spring-integration-stream-2.1.xsd
+		http://www.springframework.org/schema/task http://www.springframework.org/schema/task/spring-task-3.0.xsd
+		http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd">
+		
+	<int:gateway id="retrySampleGateway" 
+					service-interface="com.example.si.retrysample.RetrySampleGateway" 
+					default-request-channel="mainInputChannel"/>
+					
+	<int:header-enricher input-channel="mainInputChannel"
+							output-channel="intermediateChannel" >
+		<int:header name="retry_count" 
+					expression="headers.get('retry_count') != null?headers.get('retry_count') + 1:0"
+					overwrite="true"/>
+	</int:header-enricher>				
+					
+	<int:service-activator input-channel="intermediateChannel" ref="intermediateGateway"/>
+	
+	<int:gateway id="intermediateGateway" default-request-channel="saChannel" 
+				error-channel="intermediateErrorChannel"/>
+	
+	<!-- Will always thrown an ISE -->
+	<int:service-activator input-channel="saChannel">
+		<bean class="com.example.si.retrysample.ExceptionalServiceActivator"/>
+	</int:service-activator>
+	
+	<int:transformer input-channel="intermediateErrorChannel" 
+						output-channel="routerInChannel"
+						expression="T(org.springframework.integration.support.MessageBuilder).withPayload(payload.getFailedMessage()
+						.getPayload()).setHeader('retry_count',payload.getFailedMessage().getHeaders().get('retry_count')).build()"/>	
+
+	<int:router input-channel="routerInChannel" expression="headers.get('retry_count') &lt;2?'mainInputChannel':'retriesCompletedChannel'"/>
+	
+	<int:transformer input-channel="retriesCompletedChannel" 
+					output-channel="stdoutChannel"
+					expression="'Max retries completed for message with payload &quot;' + payload + '&quot;, retry count is &quot;' + headers.get('retry_count') + '&quot;'"/>
+	
+	<int:channel id="stdoutChannel"/>					
+	<int-stream:stdout-channel-adapter channel="stdoutChannel"/>
+	
+</beans>
